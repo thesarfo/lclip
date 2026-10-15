@@ -1658,14 +1658,17 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "eframe",
+ "futures-lite",
  "image",
  "ksni",
  "rustix 1.1.5",
  "serde",
  "serde_json",
+ "tokio",
  "wayland-client",
  "wayland-protocols-wlr",
  "x11rb 0.14.0",
+ "zbus",
 ]
 
 [[package]]

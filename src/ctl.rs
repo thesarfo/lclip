@@ -1,7 +1,4 @@
-use std::{
-    collections::VecDeque,
-    sync::{Arc, Mutex},
-};
+use std::{collections::VecDeque, sync::Mutex};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -10,6 +7,8 @@ pub enum Action {
     Toggle,
     Clear,
     Quit,
+    /// Internal: the window picked an entry, send the paste keys.
+    Paste,
 }
 
 impl Action {
@@ -31,6 +30,7 @@ impl Action {
             Self::Toggle => "toggle",
             Self::Clear => "clear",
             Self::Quit => "quit",
+            Self::Paste => "paste",
         }
     }
 }
@@ -39,22 +39,14 @@ impl Action {
 #[derive(Default)]
 pub struct Ctl {
     queue: Mutex<VecDeque<Action>>,
-    waker: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
 
 impl Ctl {
     pub fn send(&self, action: Action) {
         self.queue.lock().unwrap().push_back(action);
-        if let Some(w) = self.waker.lock().unwrap().as_ref() {
-            w();
-        }
     }
 
     pub fn drain(&self) -> Vec<Action> {
         self.queue.lock().unwrap().drain(..).collect()
-    }
-
-    pub fn set_waker(&self, waker: Arc<dyn Fn() + Send + Sync>) {
-        *self.waker.lock().unwrap() = Some(waker);
     }
 }

@@ -11,7 +11,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::{Entry, Format, Settings, Shared, Store};
+use crate::store::{Entry, Format, PasteKeys, Settings, Shared, Store};
 
 #[derive(Serialize, Deserialize)]
 struct Index {
@@ -40,6 +40,8 @@ struct SettingsRec {
     max_item: usize,
     skip_secrets: bool,
     persist: bool,
+    #[serde(default)]
+    paste_keys: PasteKeys,
 }
 
 /// What the writer needs, copied out of the store so the lock is not held during disk io.
@@ -86,6 +88,7 @@ pub fn load(store: &mut Store) {
             max_item: rec.max_item.max(1024 * 1024),
             skip_secrets: rec.skip_secrets,
             persist: rec.persist,
+            paste_keys: rec.paste_keys,
         };
     }
     if !store.settings.persist {
@@ -140,6 +143,7 @@ fn try_save(snap: &Snapshot) -> std::io::Result<()> {
         max_item: s.max_item,
         skip_secrets: s.skip_secrets,
         persist: s.persist,
+        paste_keys: s.paste_keys,
     };
     write_private(&root.join("settings.json"), &serde_json::to_vec_pretty(&rec)?)?;
 

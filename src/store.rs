@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime},
@@ -21,7 +22,7 @@ pub struct Format {
     pub data: Arc<Vec<u8>>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Text,
     Link,
@@ -71,6 +72,24 @@ impl Entry {
         }
     }
 
+    /// One line to show in a list.
+    pub fn title(&self) -> String {
+        let first = match self.kind() {
+            Kind::Image => "Image".to_string(),
+            Kind::Files => {
+                let n = self.text().map_or(0, |t| t.lines().filter(|l| !l.starts_with('#')).count());
+                format!("{n} file{}", if n == 1 { "" } else { "s" })
+            }
+            _ => self.text().map(|t| t.lines().next().unwrap_or("").trim().to_string()).unwrap_or_default(),
+        };
+        let first = if first.is_empty() { "(empty)".to_string() } else { first };
+        if first.chars().count() > 60 {
+            format!("{}…", first.chars().take(59).collect::<String>())
+        } else {
+            first
+        }
+    }
+
     pub fn size(&self) -> usize {
         self.visible_formats().map(|f| f.data.len()).sum()
     }
@@ -97,7 +116,16 @@ pub enum Sel {
     Primary,
 }
 
-#[derive(Clone, PartialEq)]
+/// Keys sent to the focused app after a pick. Terminals want the shifted ones.
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum PasteKeys {
+    #[default]
+    CtrlV,
+    CtrlShiftV,
+    ShiftInsert,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct Settings {
     pub max_entries: usize,
     pub keep_for: Option<Duration>,
@@ -105,6 +133,7 @@ pub struct Settings {
     pub skip_secrets: bool,
     /// Keep history on disk between runs.
     pub persist: bool,
+    pub paste_keys: PasteKeys,
 }
 
 impl Default for Settings {
@@ -115,6 +144,7 @@ impl Default for Settings {
             max_item: 64 * 1024 * 1024,
             skip_secrets: false,
             persist: true,
+            paste_keys: PasteKeys::default(),
         }
     }
 }
@@ -127,7 +157,6 @@ pub struct Store {
     /// Entry currently offered as the clipboard, if it is one of ours.
     pub current: Option<u64>,
     next_id: u64,
-    waker: Option<Arc<dyn Fn() + Send + Sync>>,
     dirty: bool,
 }
 
@@ -142,20 +171,12 @@ impl Store {
             backend,
             current: None,
             next_id: 1,
-            waker: None,
             dirty: false,
         }
     }
 
-    pub fn set_waker(&mut self, waker: Arc<dyn Fn() + Send + Sync>) {
-        self.waker = Some(waker);
-    }
-
     fn wake(&mut self) {
         self.dirty = true;
-        if let Some(w) = &self.waker {
-            w();
-        }
     }
 
     /// Settings changed from the window.
@@ -181,13 +202,6 @@ impl Store {
             next_id: self.next_id,
             entries: self.clipboard.clone(),
         })
-    }
-
-    pub fn list(&self, sel: Sel) -> &Vec<Entry> {
-        match sel {
-            Sel::Clipboard => &self.clipboard,
-            Sel::Primary => &self.primary,
-        }
     }
 
     fn list_mut(&mut self, sel: Sel) -> &mut Vec<Entry> {

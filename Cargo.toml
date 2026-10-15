@@ -6,11 +6,14 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.104"
 eframe = "0.36.2"
+futures-lite = "2.6.1"
 image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }
 ksni = { version = "0.3.6", features = ["blocking"] }
 rustix = { version = "1.1.5", features = ["event"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+tokio = { version = "1.53.3", features = ["rt", "sync", "time"] }
 wayland-client = "0.31.15"
 wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
 x11rb = { version = "0.14.0", features = ["xfixes"] }
+zbus = "5.19.0"
