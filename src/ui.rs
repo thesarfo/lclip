@@ -7,7 +7,11 @@ use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Frame, Key, Margin, RichText, Sense, Stroke, StrokeKind, Vec2,
 };
 
-use crate::store::{Cmd, Entry, Kind, SECRET_HINT, Sel, Shared};
+use crate::{
+    ctl::{Action, Ctl},
+    icon,
+    store::{Cmd, Entry, Kind, SECRET_HINT, Sel, Shared},
+};
 
 // Somu Labs palette.
 const INK: Color32 = Color32::from_rgb(0x18, 0x21, 0x2A);
@@ -20,12 +24,20 @@ const CARD: Color32 = Color32::from_rgb(0xFA, 0xF9, 0xF6);
 
 const ROW_H: f32 = 56.0;
 
-pub fn run(shared: Shared, tx: Sender<Cmd>) -> eframe::Result {
+pub struct Launch {
+    pub hidden: bool,
+    pub tray: bool,
+}
+
+pub fn run(shared: Shared, tx: Sender<Cmd>, ctl: Arc<Ctl>, launch: Launch) -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([400.0, 600.0])
             .with_min_inner_size([360.0, 420.0])
-            .with_title("lclip"),
+            .with_title("lclip")
+            .with_app_id("lclip")
+            .with_visible(!launch.hidden)
+            .with_icon(egui::IconData { rgba: icon::rgba(64, false), width: 64, height: 64 }),
         ..Default::default()
     };
     eframe::run_native(
@@ -35,7 +47,9 @@ pub fn run(shared: Shared, tx: Sender<Cmd>) -> eframe::Result {
             style(&cc.egui_ctx);
             let ctx = cc.egui_ctx.clone();
             shared.lock().unwrap().set_waker(Arc::new(move || ctx.request_repaint()));
-            Ok(Box::new(App::new(shared, tx)))
+            let ctx = cc.egui_ctx.clone();
+            ctl.set_waker(Arc::new(move || ctx.request_repaint()));
+            Ok(Box::new(App::new(shared, tx, ctl, launch)))
         }),
     )
 }
@@ -68,11 +82,68 @@ struct App {
     selected: Option<u64>,
     fmt: Option<String>,
     settings: bool,
+    ctl: Arc<Ctl>,
+    visible: bool,
+    quitting: bool,
+    tray: bool,
 }
 
 impl App {
-    fn new(shared: Shared, tx: Sender<Cmd>) -> Self {
-        Self { shared, tx, query: String::new(), tab: Sel::Clipboard, selected: None, fmt: None, settings: false }
+    fn new(shared: Shared, tx: Sender<Cmd>, ctl: Arc<Ctl>, launch: Launch) -> Self {
+        Self {
+            shared,
+            tx,
+            query: String::new(),
+            tab: Sel::Clipboard,
+            selected: None,
+            fmt: None,
+            settings: false,
+            ctl,
+            visible: !launch.hidden,
+            quitting: false,
+            tray: launch.tray,
+        }
+    }
+
+    /// Tray clicks, `lclip show`, and the window close button.
+    fn handle_actions(&mut self, ctx: &egui::Context) {
+        use egui::ViewportCommand as V;
+        for action in self.ctl.drain() {
+            match action {
+                Action::Show => self.set_visible(ctx, true),
+                Action::Hide => self.set_visible(ctx, false),
+                Action::Toggle => self.set_visible(ctx, !self.visible),
+                Action::Clear => {
+                    let (gone, current) = {
+                        let mut s = self.shared.lock().unwrap();
+                        (s.clear_unpinned(), s.current)
+                    };
+                    if current.is_some_and(|c| gone.contains(&c)) {
+                        let _ = self.tx.send(Cmd::Clear);
+                    }
+                    self.selected = None;
+                }
+                Action::Quit => {
+                    self.quitting = true;
+                    ctx.send_viewport_cmd(V::Close);
+                }
+            }
+        }
+        // Closing the window sends it to the tray instead of quitting.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quitting && self.tray {
+            ctx.send_viewport_cmd(V::CancelClose);
+            self.set_visible(ctx, false);
+        }
+    }
+
+    fn set_visible(&mut self, ctx: &egui::Context, show: bool) {
+        use egui::ViewportCommand as V;
+        self.visible = show;
+        ctx.send_viewport_cmd(V::Visible(show));
+        if show {
+            ctx.send_viewport_cmd(V::Minimized(false));
+            ctx.send_viewport_cmd(V::Focus);
+        }
     }
 
     fn paste(&self, id: u64, mime: Option<String>) {
@@ -94,8 +165,9 @@ impl App {
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        // Secret countdowns and "x min ago" labels.
+        // Secret countdowns, "x min ago" labels, and tray requests while hidden.
         ctx.request_repaint_after(Duration::from_millis(500));
+        self.handle_actions(&ctx);
 
         let (backend, count) = {
             let s = self.shared.lock().unwrap();

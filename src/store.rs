@@ -218,6 +218,21 @@ impl Store {
         self.wake();
     }
 
+    /// Drop everything that is not pinned. Returns the removed ids.
+    pub fn clear_unpinned(&mut self) -> Vec<u64> {
+        let mut gone = Vec::new();
+        for list in [&mut self.clipboard, &mut self.primary] {
+            list.retain(|e| {
+                if !e.pinned {
+                    gone.push(e.id);
+                }
+                e.pinned
+            });
+        }
+        self.wake();
+        gone
+    }
+
     pub fn toggle_pin(&mut self, id: u64) {
         for e in self.clipboard.iter_mut().chain(self.primary.iter_mut()) {
             if e.id == id {
