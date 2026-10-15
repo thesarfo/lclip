@@ -31,7 +31,8 @@ on gnome the tray needs the appindicator extension (ubuntu ships it on).
 
 keys: `↑↓` move, `↵` paste, `p` pin, `⌫` delete, `/` search.
 
-history is memory only for now.
+history is saved to `~/.local/share/lclip` (private files, mode 600). secrets are never saved.
+turn it off under settings and the saved files are removed.
 
 ## fonts
 

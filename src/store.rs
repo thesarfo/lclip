@@ -97,12 +97,14 @@ pub enum Sel {
     Primary,
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Settings {
     pub max_entries: usize,
     pub keep_for: Option<Duration>,
     pub max_item: usize,
     pub skip_secrets: bool,
+    /// Keep history on disk between runs.
+    pub persist: bool,
 }
 
 impl Default for Settings {
@@ -112,6 +114,7 @@ impl Default for Settings {
             keep_for: Some(Duration::from_secs(24 * 3600)),
             max_item: 64 * 1024 * 1024,
             skip_secrets: false,
+            persist: true,
         }
     }
 }
@@ -125,6 +128,7 @@ pub struct Store {
     pub current: Option<u64>,
     next_id: u64,
     waker: Option<Arc<dyn Fn() + Send + Sync>>,
+    dirty: bool,
 }
 
 pub type Shared = Arc<Mutex<Store>>;
@@ -139,6 +143,7 @@ impl Store {
             current: None,
             next_id: 1,
             waker: None,
+            dirty: false,
         }
     }
 
@@ -146,10 +151,36 @@ impl Store {
         self.waker = Some(waker);
     }
 
-    fn wake(&self) {
+    fn wake(&mut self) {
+        self.dirty = true;
         if let Some(w) = &self.waker {
             w();
         }
+    }
+
+    /// Settings changed from the window.
+    pub fn touch(&mut self) {
+        self.wake();
+    }
+
+    /// History loaded from disk, newest first.
+    pub fn restore(&mut self, entries: Vec<Entry>, next_id: u64) {
+        self.clipboard = entries;
+        self.next_id = self.next_id.max(next_id);
+        self.sweep();
+        self.dirty = false;
+    }
+
+    /// A copy of what should be on disk, if anything changed since the last call.
+    pub fn take_dirty(&mut self) -> Option<crate::persist::Snapshot> {
+        if !std::mem::take(&mut self.dirty) {
+            return None;
+        }
+        Some(crate::persist::Snapshot {
+            settings: self.settings.clone(),
+            next_id: self.next_id,
+            entries: self.clipboard.clone(),
+        })
     }
 
     pub fn list(&self, sel: Sel) -> &Vec<Entry> {

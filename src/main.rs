@@ -1,5 +1,6 @@
 mod ctl;
 mod icon;
+mod persist;
 mod single;
 mod store;
 mod tray;
@@ -85,7 +86,10 @@ fn main() -> Result<()> {
         unsafe { env::remove_var("WAYLAND_DISPLAY") };
     }
 
-    let shared = Arc::new(Mutex::new(Store::new(backend.to_string())));
+    let mut store = Store::new(backend.to_string());
+    persist::load(&mut store);
+    let shared = Arc::new(Mutex::new(store));
+    persist::spawn(Arc::clone(&shared));
     let ctl = Arc::new(Ctl::default());
     let (tx, rx) = mpsc::channel::<Cmd>();
 
@@ -110,7 +114,10 @@ fn main() -> Result<()> {
         loop {
             for a in ctl.drain() {
                 match a {
-                    Action::Quit => return Ok(()),
+                    Action::Quit => {
+                        persist::flush(&shared);
+                        return Ok(());
+                    }
                     Action::Clear => {
                         let gone = shared.lock().unwrap().clear_unpinned();
                         let current = shared.lock().unwrap().current;
@@ -129,7 +136,8 @@ fn main() -> Result<()> {
     }
 
     let tray = tray::start(Arc::clone(&ctl));
-    let result = ui::run(shared, tx, ctl, ui::Launch { hidden, tray: tray.is_some() });
+    let result = ui::run(Arc::clone(&shared), tx, ctl, ui::Launch { hidden, tray: tray.is_some() });
+    persist::flush(&shared);
     drop(tray);
     result.map_err(|e| anyhow::anyhow!("{e}"))
 }

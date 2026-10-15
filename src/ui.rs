@@ -566,10 +566,16 @@ impl App {
             row(ui, "Skip password manager copies", None, &mut |ui| {
                 ui.checkbox(&mut set.skip_secrets, "");
             });
+            row(ui, "Save history to disk", Some("secrets are never saved"), &mut |ui| {
+                ui.checkbox(&mut set.persist, "");
+            });
             row(ui, "Secrets", Some("memory only, cleared after 30 s"), &mut |_| {});
         });
 
-        s.settings = set;
+        if s.settings != set {
+            s.settings = set;
+            s.touch();
+        }
     }
 }
 
@@ -592,7 +598,8 @@ fn title(e: &Entry) -> String {
 
 fn meta(e: &Entry) -> String {
     let mut fmts = e.visible_formats();
-    let first = fmts.next().map_or("", |f| f.mime.as_str()).split(';').next().unwrap_or("").to_string();
+    let first = fmts.next().map_or("", |f| f.mime.as_str()).split(';').next().unwrap_or("");
+    let first = if matches!(first, "UTF8_STRING" | "STRING") { "text/plain" } else { first }.to_string();
     let more = fmts.count();
     let mime = if more > 0 { format!("{first} +{more}") } else { first };
     format!("{mime} · {} · {}", human(e.size()), ago(e))
@@ -735,6 +742,7 @@ mod debug {
 
         let mut s = shared.lock().unwrap();
         s.settings.skip_secrets = false;
+        s.settings.persist = false;
         s.push(Sel::Clipboard, vec![fmt("text/plain", b"wlr-data-control")], false);
         s.push(Sel::Primary, vec![fmt("text/plain", b"selected with the mouse")], false);
         s.push(
