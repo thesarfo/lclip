@@ -2,7 +2,7 @@
 Type=Application
 Name=lclip
 Comment=Clipboard manager
-Exec=@BIN@ --hidden
+Exec=@BIN@ --daemon
 Icon=lclip
 Terminal=false
 X-GNOME-Autostart-enabled=true

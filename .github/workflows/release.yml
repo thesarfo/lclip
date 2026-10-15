@@ -1,0 +1,45 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcb1-dev libgl1-mesa-dev libdbus-1-dev
+
+      - name: build
+        run: cargo build --release --locked
+
+      - name: package
+        run: |
+          name="lclip-${GITHUB_REF_NAME}-x86_64-linux"
+          mkdir "$name"
+          cp target/release/lclip "$name/lclip"
+          cp install.sh README.md "$name/"
+          mkdir "$name/assets"
+          cp assets/lclip.svg assets/lclip.desktop assets/lclip-autostart.desktop "$name/assets/"
+          tar czf "$name.tar.gz" "$name"
+          sha256sum "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - name: release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            lclip-*.tar.gz
+            lclip-*.tar.gz.sha256
