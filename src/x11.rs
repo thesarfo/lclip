@@ -1,6 +1,6 @@
 use std::{
-    collections::VecDeque,
-    rc::Rc,
+    collections::{HashMap, VecDeque},
+    sync::{Arc, mpsc::Receiver},
     thread::sleep,
     time::{Duration, Instant},
 };
@@ -22,34 +22,26 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
+use crate::store::{Cmd, Format, SECRET_HINT, Sel, Shared, is_data_mime};
+
 // Larger values go out in INCR chunks; must stay a multiple of 4.
 const CHUNK: usize = 256 * 1024;
-const MAX_BYTES: usize = 64 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(2);
-const SECRET_HINT: &str = "x-kde-passwordManagerHint";
+const TICK: Duration = Duration::from_millis(15);
 
 struct Atoms {
     clipboard: Atom,
+    primary: Atom,
     targets: Atom,
     incr: Atom,
     prop: Atom,
-    hint: Atom,
-    skip: Vec<Atom>,
-}
-
-struct Held {
-    target: Atom,
-    ty: Atom,
-    format: u8,
-    data: Rc<Vec<u8>>,
 }
 
 struct Transfer {
     win: Window,
     prop: Atom,
     ty: Atom,
-    format: u8,
-    data: Rc<Vec<u8>>,
+    data: Arc<Vec<u8>>,
     offset: usize,
 }
 
@@ -57,12 +49,17 @@ struct Ctx {
     conn: RustConnection,
     win: Window,
     atoms: Atoms,
-    held: Vec<Held>,
+    shared: Shared,
+    rx: Receiver<Cmd>,
+    names: HashMap<Atom, String>,
+    ids: HashMap<String, Atom>,
+    held: Vec<(Atom, Arc<Vec<u8>>)>,
     queue: VecDeque<Event>,
     transfers: Vec<Transfer>,
+    max_item: usize,
 }
 
-pub fn run() -> Result<()> {
+pub fn run(shared: Shared, rx: Receiver<Cmd>) -> Result<()> {
     let (conn, screen_num) = RustConnection::connect(None).context("cannot connect to X server")?;
     let root = conn.setup().roots[screen_num].root;
 
@@ -84,44 +81,137 @@ pub fn run() -> Result<()> {
     let intern = |name: &str| -> Result<Atom> { Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom) };
     let atoms = Atoms {
         clipboard: intern("CLIPBOARD")?,
+        primary: AtomEnum::PRIMARY.into(),
         targets: intern("TARGETS")?,
         incr: intern("INCR")?,
         prop: intern("LCLIP_DATA")?,
-        hint: intern(SECRET_HINT)?,
-        // Protocol atoms that describe a selection but carry no content.
-        skip: ["TARGETS", "TIMESTAMP", "MULTIPLE", "SAVE_TARGETS", "DELETE"]
-            .iter()
-            .map(|n| intern(n))
-            .collect::<Result<_>>()?,
     };
 
     conn.xfixes_query_version(5, 0)?.reply().context("XFixes extension missing")?;
-    conn.xfixes_select_selection_input(win, atoms.clipboard, xfixes::SelectionEventMask::SET_SELECTION_OWNER)?;
+    for sel in [atoms.clipboard, atoms.primary] {
+        conn.xfixes_select_selection_input(win, sel, xfixes::SelectionEventMask::SET_SELECTION_OWNER)?;
+    }
     conn.flush()?;
 
-    let mut ctx = Ctx { conn, win, atoms, held: Vec::new(), queue: VecDeque::new(), transfers: Vec::new() };
+    let mut ctx = Ctx {
+        conn,
+        win,
+        atoms,
+        shared,
+        rx,
+        names: HashMap::new(),
+        ids: HashMap::new(),
+        held: Vec::new(),
+        queue: VecDeque::new(),
+        transfers: Vec::new(),
+        max_item: 0,
+    };
+
     eprintln!("lclip running (x11)");
+    let mut last_sweep = Instant::now();
     loop {
         while let Some(ev) = ctx.queue.pop_front() {
             ctx.handle(ev)?;
         }
-        let ev = ctx.conn.wait_for_event()?;
-        ctx.handle(ev)?;
+        while let Some(ev) = ctx.conn.poll_for_event()? {
+            ctx.handle(ev)?;
+        }
+        while let Ok(cmd) = ctx.rx.try_recv() {
+            ctx.command(cmd)?;
+        }
+        if last_sweep.elapsed() >= Duration::from_millis(500) {
+            last_sweep = Instant::now();
+            ctx.sweep()?;
+        }
+        sleep(TICK);
     }
 }
 
 impl Ctx {
+    fn atom(&mut self, name: &str) -> Result<Atom> {
+        if let Some(a) = self.ids.get(name) {
+            return Ok(*a);
+        }
+        let a = self.conn.intern_atom(false, name.as_bytes())?.reply()?.atom;
+        self.ids.insert(name.to_string(), a);
+        self.names.insert(a, name.to_string());
+        Ok(a)
+    }
+
+    fn name(&mut self, atom: Atom) -> Result<String> {
+        if let Some(n) = self.names.get(&atom) {
+            return Ok(n.clone());
+        }
+        let n = String::from_utf8_lossy(&self.conn.get_atom_name(atom)?.reply()?.name).into_owned();
+        self.names.insert(atom, n.clone());
+        self.ids.insert(n.clone(), atom);
+        Ok(n)
+    }
+
     fn handle(&mut self, ev: Event) -> Result<()> {
         match ev {
-            Event::XfixesSelectionNotify(e) if e.selection == self.atoms.clipboard => {
-                if e.owner != self.win && e.owner != NONE {
-                    self.grab()?;
+            Event::XfixesSelectionNotify(e) if e.owner != self.win && e.owner != NONE => {
+                if e.selection == self.atoms.clipboard {
+                    self.grab(self.atoms.clipboard, Sel::Clipboard)?;
+                } else if e.selection == self.atoms.primary {
+                    self.grab(self.atoms.primary, Sel::Primary)?;
                 }
             }
             Event::SelectionRequest(r) => self.serve(r)?,
             Event::PropertyNotify(p) if p.state == Property::DELETE => self.continue_transfer(p.window, p.atom)?,
             _ => {}
         }
+        Ok(())
+    }
+
+    fn command(&mut self, cmd: Cmd) -> Result<()> {
+        match cmd {
+            Cmd::Use { id, mime } => self.offer(id, mime.as_deref())?,
+            Cmd::Clear => self.release()?,
+        }
+        Ok(())
+    }
+
+    fn sweep(&mut self) -> Result<()> {
+        let (gone, current) = {
+            let mut s = self.shared.lock().unwrap();
+            (s.sweep(), s.current)
+        };
+        if current.is_some_and(|c| gone.contains(&c)) {
+            self.release()?;
+        }
+        Ok(())
+    }
+
+    fn release(&mut self) -> Result<()> {
+        self.held.clear();
+        self.transfers.clear();
+        self.conn.set_selection_owner(NONE, self.atoms.clipboard, CURRENT_TIME)?;
+        self.conn.flush()?;
+        self.shared.lock().unwrap().current = None;
+        Ok(())
+    }
+
+    /// Become the clipboard owner serving entry `id`, or just one of its formats.
+    fn offer(&mut self, id: u64, only: Option<&str>) -> Result<()> {
+        let formats: Vec<Format> = {
+            let s = self.shared.lock().unwrap();
+            let Some(e) = s.find(id) else { return Ok(()) };
+            e.formats
+                .iter()
+                .filter(|f| only.is_none_or(|m| f.mime == m) || f.mime == SECRET_HINT)
+                .cloned()
+                .collect()
+        };
+        let mut held = Vec::new();
+        for f in formats {
+            held.push((self.atom(&f.mime)?, f.data));
+        }
+        self.held = held;
+        self.transfers.clear();
+        self.conn.set_selection_owner(self.win, self.atoms.clipboard, CURRENT_TIME)?;
+        self.conn.flush()?;
+        self.shared.lock().unwrap().current = Some(id);
         Ok(())
     }
 
@@ -152,7 +242,7 @@ impl Ctx {
                 .reply()?;
             offset += (r.value.len() / 4) as u32;
             data.extend_from_slice(&r.value);
-            if r.bytes_after == 0 || data.len() > MAX_BYTES {
+            if r.bytes_after == 0 || data.len() > self.max_item {
                 break (r.type_, r.format);
             }
         };
@@ -161,10 +251,11 @@ impl Ctx {
         Ok((ty, format, data))
     }
 
-    fn fetch(&mut self, target: Atom) -> Result<Option<Held>> {
+    /// Ask the selection owner for one target. Returns the property format and bytes.
+    fn fetch(&mut self, selection: Atom, target: Atom) -> Result<Option<(u8, Vec<u8>)>> {
         let (win, prop) = (self.win, self.atoms.prop);
         self.conn.delete_property(win, prop)?;
-        self.conn.convert_selection(win, self.atoms.clipboard, target, prop, CURRENT_TIME)?;
+        self.conn.convert_selection(win, selection, target, prop, CURRENT_TIME)?;
         self.conn.flush()?;
 
         let notified = self.wait_event(|e| matches!(e, Event::SelectionNotify(n) if n.requestor == win && n.target == target))?;
@@ -173,7 +264,7 @@ impl Ctx {
             return Ok(None);
         }
 
-        let (mut ty, mut format, mut data) = self.read_prop()?;
+        let (ty, mut format, mut data) = self.read_prop()?;
         if ty == self.atoms.incr {
             data.clear();
             loop {
@@ -183,51 +274,57 @@ impl Ctx {
                 if next.is_none() {
                     return Ok(None);
                 }
-                let (t, f, chunk) = self.read_prop()?;
+                let (_, f, chunk) = self.read_prop()?;
                 if chunk.is_empty() {
                     break;
                 }
-                (ty, format) = (t, f);
+                format = f;
                 data.extend_from_slice(&chunk);
-                if data.len() > MAX_BYTES {
+                if data.len() > self.max_item {
                     return Ok(None);
                 }
             }
         }
-        if data.is_empty() {
+        if data.is_empty() || data.len() > self.max_item {
             return Ok(None);
         }
-        Ok(Some(Held { target, ty, format, data: Rc::new(data) }))
+        Ok(Some((format, data)))
     }
 
-    fn grab(&mut self) -> Result<()> {
-        let Some(offered) = self.fetch(self.atoms.targets)? else { return Ok(()) };
-        let targets: Vec<Atom> = offered
-            .data
-            .chunks_exact(4)
-            .map(|b| u32::from_ne_bytes(b.try_into().unwrap()))
-            .collect();
-        if targets.contains(&self.atoms.hint) {
-            return Ok(());
+    fn grab(&mut self, selection: Atom, sel: Sel) -> Result<()> {
+        self.max_item = self.shared.lock().unwrap().settings.max_item;
+
+        let Some((_, raw)) = self.fetch(selection, self.atoms.targets)? else { return Ok(()) };
+        let mut targets = Vec::new();
+        for b in raw.chunks_exact(4) {
+            let atom = u32::from_ne_bytes(b.try_into().unwrap());
+            targets.push((atom, self.name(atom)?));
         }
 
-        let mut held = Vec::new();
-        let skip = self.atoms.skip.clone();
-        for t in targets.into_iter().filter(|t| !skip.contains(t)) {
-            if let Some(h) = self.fetch(t)? {
-                held.push(h);
+        let secret = targets.iter().any(|(_, n)| n == SECRET_HINT);
+        let mut formats = Vec::new();
+        for (atom, name) in targets {
+            if !is_data_mime(&name) || name == SECRET_HINT {
+                continue;
+            }
+            if let Some((8, data)) = self.fetch(selection, atom)? {
+                formats.push(Format { mime: name, data: Arc::new(data) });
             }
         }
-        if held.is_empty() {
+        if formats.is_empty() {
             return Ok(());
         }
-        let bytes: usize = held.iter().map(|h| h.data.len()).sum();
-        eprintln!("kept {} formats, {} bytes", held.len(), bytes);
+        if secret {
+            formats.push(Format { mime: SECRET_HINT.into(), data: Arc::new(b"secret".to_vec()) });
+        }
 
-        self.held = held;
-        self.transfers.clear();
-        self.conn.set_selection_owner(self.win, self.atoms.clipboard, CURRENT_TIME)?;
-        self.conn.flush()?;
+        let id = self.shared.lock().unwrap().push(sel, formats, secret);
+        if sel == Sel::Clipboard {
+            match id {
+                Some(id) => self.offer(id, None)?,
+                None => self.shared.lock().unwrap().current = None,
+            }
+        }
         Ok(())
     }
 
@@ -239,10 +336,10 @@ impl Ctx {
             reply = NONE;
         } else if r.target == self.atoms.targets {
             let mut list = vec![self.atoms.targets];
-            list.extend(self.held.iter().map(|h| h.target));
+            list.extend(self.held.iter().map(|(t, _)| *t));
             self.conn.change_property32(PropMode::REPLACE, r.requestor, prop, AtomEnum::ATOM, &list)?;
-        } else if let Some(h) = self.held.iter().find(|h| h.target == r.target) {
-            if h.data.len() > CHUNK {
+        } else if let Some((_, data)) = self.held.iter().find(|(t, _)| *t == r.target) {
+            if data.len() > CHUNK {
                 self.conn.change_window_attributes(
                     r.requestor,
                     &ChangeWindowAttributesAux::new().event_mask(EventMask::PROPERTY_CHANGE),
@@ -252,20 +349,17 @@ impl Ctx {
                     r.requestor,
                     prop,
                     self.atoms.incr,
-                    &[h.data.len() as u32],
+                    &[data.len() as u32],
                 )?;
                 self.transfers.push(Transfer {
                     win: r.requestor,
                     prop,
-                    ty: h.ty,
-                    format: h.format,
-                    data: Rc::clone(&h.data),
+                    ty: r.target,
+                    data: Arc::clone(data),
                     offset: 0,
                 });
             } else {
-                let units = h.data.len() / (h.format as usize / 8);
-                self.conn
-                    .change_property(PropMode::REPLACE, r.requestor, prop, h.ty, h.format, units as u32, &h.data)?;
+                self.conn.change_property8(PropMode::REPLACE, r.requestor, prop, r.target, data)?;
             }
         } else {
             reply = NONE;
@@ -292,9 +386,7 @@ impl Ctx {
         let t = &mut self.transfers[i];
         let end = (t.offset + CHUNK).min(t.data.len());
         let chunk = &t.data[t.offset..end];
-        let units = chunk.len() / (t.format as usize / 8);
-        self.conn
-            .change_property(PropMode::REPLACE, win, prop, t.ty, t.format, units as u32, chunk)?;
+        self.conn.change_property8(PropMode::REPLACE, win, prop, t.ty, chunk)?;
         t.offset = end;
 
         if chunk.is_empty() {
