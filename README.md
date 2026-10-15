@@ -36,7 +36,7 @@ In the window: click or `Enter` pastes, `Shift` pastes plain text, `Ctrl+P` pins
 
 ## Notes
 
-- Pasting uses the RemoteDesktop portal. Your desktop asks once whether lclip may send keys.
+- Pasting sends `Ctrl+V` to the focused app, with no permission prompt. Apps drawn natively on Wayland ignore it, so there you press paste yourself.
 - Terminals paste with `Ctrl+Shift+V`. Set it under Settings, Paste keys.
 - History is saved in `~/.local/share/lclip`, readable only by you. Secrets are never saved.
 - GNOME on Wayland reads the clipboard through XWayland.
