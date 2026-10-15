@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=lclip
+Comment=Clipboard manager
+Exec=@BIN@ --hidden
+Icon=lclip
+Terminal=false
+X-GNOME-Autostart-enabled=true

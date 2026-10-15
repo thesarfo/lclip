@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=lclip
+Comment=Clipboard manager
+Exec=@BIN@
+Icon=lclip
+Terminal=false
+Categories=Utility;
+StartupWMClass=lclip
