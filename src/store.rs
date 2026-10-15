@@ -47,7 +47,7 @@ impl Entry {
     }
 
     pub fn text(&self) -> Option<String> {
-        ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING"]
+        ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain", "STRING", "text/uri-list"]
             .iter()
             .find_map(|m| self.formats.iter().find(|f| f.mime == *m))
             .map(|f| String::from_utf8_lossy(&f.data).into_owned())

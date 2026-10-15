@@ -32,3 +32,8 @@ on gnome the tray needs the appindicator extension (ubuntu ships it on).
 keys: `↑↓` move, `↵` paste, `p` pin, `⌫` delete, `/` search.
 
 history is memory only for now.
+
+## fonts
+
+bundled under the sil open font license (texts in `assets/fonts`):
+hanken grotesk, ibm plex mono, instrument serif.
