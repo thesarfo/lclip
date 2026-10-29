@@ -36,7 +36,7 @@ In the window: click or `Enter` pastes, `Shift` pastes plain text, `Ctrl+P` pins
 
 ## Notes
 
-- Pasting sends `Ctrl+V` to the focused app, with no permission prompt. Apps drawn natively on Wayland ignore it, so there you press paste yourself.
+- Pasting sends `Ctrl+V` through a virtual keyboard on `/dev/uinput`, with no permission prompt. If your user cannot write to it, the entry stays on the clipboard and you press paste yourself.
 - Terminals paste with `Ctrl+Shift+V`. Set it under Settings, Paste keys.
 - History is saved in `~/.local/share/lclip`, readable only by you. Secrets are never saved.
 - GNOME on Wayland reads the clipboard through XWayland.

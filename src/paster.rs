@@ -1,25 +1,20 @@
-//! Types the paste keys into the focused app with the X11 XTest extension.
+//! Types the paste keys into the focused app through a virtual keyboard on
+//! /dev/uinput.
 //!
-//! This reaches X11 apps and XWayland apps without any permission prompt.
-//! Native Wayland windows ignore it; there the entry is on the clipboard
-//! and the user presses paste.
+//! The kernel hands the keys to the compositor like any other keyboard, so it
+//! works in X11 and native Wayland windows and never asks for permission.
+//! It needs write access to /dev/uinput, which most desktops give the
+//! logged-in user. Without it the entry stays on the clipboard and the user
+//! presses paste.
 
 use std::sync::mpsc::{Sender, channel};
 use std::thread;
+use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
-use x11rb::{
-    connection::Connection,
-    protocol::{xproto::ConnectionExt as _, xtest::ConnectionExt as _},
-    rust_connection::RustConnection,
-};
+use anyhow::{Context, Result};
+use evdev::{AttributeSet, EventType, InputEvent, KeyCode, uinput::VirtualDevice};
 
 use crate::store::PasteKeys;
-
-const KS_CONTROL: u32 = 0xffe3;
-const KS_SHIFT: u32 = 0xffe1;
-const KS_V: u32 = 0x0076;
-const KS_INSERT: u32 = 0xff63;
 
 #[derive(Clone)]
 pub struct Paster {
@@ -30,18 +25,13 @@ impl Paster {
     pub fn spawn() -> Self {
         let (tx, rx) = channel::<PasteKeys>();
         thread::spawn(move || {
-            let mut conn: Option<RustConnection> = None;
+            let mut dev = open()
+                .map_err(|e| eprintln!("lclip: no virtual keyboard ({e:#}), paste it yourself"))
+                .ok();
             while let Ok(keys) = rx.recv() {
-                if conn.is_none() {
-                    conn = RustConnection::connect(None).ok().map(|(c, _)| c);
-                }
-                let Some(c) = conn.as_ref() else {
-                    eprintln!("lclip: no X display, the entry is on the clipboard, paste it yourself");
-                    continue;
-                };
-                if let Err(e) = press(c, keys) {
+                let Some(d) = dev.as_mut() else { continue };
+                if let Err(e) = press(d, keys) {
                     eprintln!("lclip: paste failed: {e:#}");
-                    conn = None;
                 }
             }
         });
@@ -53,33 +43,33 @@ impl Paster {
     }
 }
 
-fn keycode(c: &RustConnection, keysym: u32) -> Result<u8> {
-    let setup = c.setup();
-    let (min, max) = (setup.min_keycode, setup.max_keycode);
-    let map = c.get_keyboard_mapping(min, max - min + 1)?.reply()?;
-    let per = map.keysyms_per_keycode as usize;
-    map.keysyms
-        .chunks(per)
-        .position(|k| k.contains(&keysym))
-        .map(|i| min + i as u8)
-        .ok_or_else(|| anyhow!("no key for keysym {keysym:#x}"))
+fn open() -> Result<VirtualDevice> {
+    let mut keys = AttributeSet::<KeyCode>::new();
+    for k in [KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_V, KeyCode::KEY_INSERT] {
+        keys.insert(k);
+    }
+    let dev = VirtualDevice::builder()
+        .context("/dev/uinput")?
+        .name("lclip paste")
+        .with_keys(&keys)?
+        .build()?;
+    // The compositor needs a moment to notice the new device.
+    thread::sleep(Duration::from_millis(300));
+    Ok(dev)
 }
 
-fn press(c: &RustConnection, keys: PasteKeys) -> Result<()> {
-    let ctrl = keycode(c, KS_CONTROL)?;
-    let shift = keycode(c, KS_SHIFT)?;
-    let seq: Vec<u8> = match keys {
-        PasteKeys::CtrlV => vec![ctrl, keycode(c, KS_V)?],
-        PasteKeys::CtrlShiftV => vec![ctrl, shift, keycode(c, KS_V)?],
-        PasteKeys::ShiftInsert => vec![shift, keycode(c, KS_INSERT)?],
+fn press(dev: &mut VirtualDevice, keys: PasteKeys) -> Result<()> {
+    let seq = match keys {
+        PasteKeys::CtrlV => vec![KeyCode::KEY_LEFTCTRL, KeyCode::KEY_V],
+        PasteKeys::CtrlShiftV => vec![KeyCode::KEY_LEFTCTRL, KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_V],
+        PasteKeys::ShiftInsert => vec![KeyCode::KEY_LEFTSHIFT, KeyCode::KEY_INSERT],
     };
-    let fake = |ty: u8, code: u8| c.xtest_fake_input(ty, code, 0, 0, 0, 0, 0).context("xtest");
+    let ev = |k: KeyCode, v: i32| InputEvent::new(EventType::KEY.0, k.code(), v);
     for &k in &seq {
-        fake(2, k)?; // KeyPress
+        dev.emit(&[ev(k, 1)])?;
     }
     for &k in seq.iter().rev() {
-        fake(3, k)?; // KeyRelease
+        dev.emit(&[ev(k, 0)])?;
     }
-    c.flush()?;
     Ok(())
 }
