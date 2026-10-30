@@ -51,6 +51,15 @@ pub struct Snapshot {
     pub entries: Vec<Entry>,
 }
 
+#[cfg(target_os = "macos")]
+fn dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join("Library/Application Support"))
+        .unwrap_or_else(env::temp_dir)
+        .join("lclip")
+}
+
+#[cfg(not(target_os = "macos"))]
 fn dir() -> PathBuf {
     env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)

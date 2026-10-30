@@ -53,6 +53,7 @@ pub fn rgba(size: u32, light: bool) -> Vec<u8> {
     out
 }
 
+#[cfg(target_os = "linux")]
 /// StatusNotifierItem wants ARGB32 in network byte order.
 pub fn argb(size: u32, light: bool) -> Vec<u8> {
     let mut d = rgba(size, light);

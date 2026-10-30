@@ -20,8 +20,10 @@ use eframe::egui::{
 use crate::{
     icon,
     ipc::{self, EntryView, Request, Snapshot},
-    store::{Kind, PasteKeys, Sel},
+    store::{Kind, Sel},
 };
+#[cfg(not(target_os = "macos"))]
+use crate::store::PasteKeys;
 
 // Somu Labs palette.
 const INK: Color32 = Color32::from_rgb(0x18, 0x21, 0x2A);
@@ -31,6 +33,8 @@ const PAPER: Color32 = Color32::from_rgb(0xF0, 0xEF, 0xEA);
 const MIST: Color32 = Color32::from_rgb(0xDC, 0xE4, 0xD8);
 const STONE: Color32 = Color32::from_rgb(0x5E, 0x67, 0x6A);
 const CARD: Color32 = Color32::from_rgb(0xFA, 0xF9, 0xF6);
+
+const PIN_KEY: &str = if cfg!(target_os = "macos") { "Cmd P" } else { "Ctrl P" };
 
 const W: f32 = 400.0;
 const H: f32 = 620.0;
@@ -47,6 +51,12 @@ pub fn run() -> eframe::Result {
             .with_title("lclip")
             .with_app_id("lclip")
             .with_icon(egui::IconData { rgba: icon::rgba(64, false), width: 64, height: 64 }),
+        // A popup, not an app: no Dock icon or menu bar while it is open.
+        #[cfg(target_os = "macos")]
+        event_loop_builder: Some(Box::new(|b| {
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
+            b.with_activation_policy(ActivationPolicy::Accessory);
+        })),
         ..Default::default()
     };
     eframe::run_native(
@@ -362,10 +372,15 @@ impl App {
         let tabs = Rect::from_min_size(full.min + Vec2::new(PAD, 114.0), Vec2::new(W - 2.0 * PAD, 36.0));
         ui.painter().rect_filled(tabs, 10, PAPER);
         let counts = [snap.clipboard.len(), snap.primary.len()];
-        for (i, (sel, name)) in [(Sel::Clipboard, "Clipboard"), (Sel::Primary, "Primary")].into_iter().enumerate() {
+        // macOS has no primary selection.
+        let n_tabs = if cfg!(target_os = "macos") { 1 } else { 2 };
+        let seg_w = (tabs.width() - 8.0) / n_tabs as f32;
+        for (i, (sel, name)) in
+            [(Sel::Clipboard, "Clipboard"), (Sel::Primary, "Primary")].into_iter().take(n_tabs).enumerate()
+        {
             let seg = Rect::from_min_size(
-                tabs.min + Vec2::new(4.0 + i as f32 * (tabs.width() - 8.0) / 2.0, 4.0),
-                Vec2::new((tabs.width() - 8.0) / 2.0, tabs.height() - 8.0),
+                tabs.min + Vec2::new(4.0 + i as f32 * seg_w, 4.0),
+                Vec2::new(seg_w, tabs.height() - 8.0),
             );
             let resp = ui.interact(seg, ui.id().with(("tab", i)), Sense::click());
             let on = self.tab == sel;
@@ -593,6 +608,8 @@ impl App {
                 });
             });
 
+            // Every Mac app pastes with Cmd V, so there is nothing to choose there.
+            #[cfg(not(target_os = "macos"))]
             group(ui, "PASTING", |ui| {
                 setting(ui, "Paste keys", None, |ui| {
                     let opts = ["Ctrl V", "Ctrl Shift V", "Shift Ins"];
@@ -607,6 +624,7 @@ impl App {
                 });
             });
 
+            #[cfg(not(target_os = "macos"))]
             ui.label(egui::RichText::new("Terminals need Ctrl Shift V.").font(body(12.5)).color(STONE));
 
             group(ui, "PRIVACY", |ui| {
@@ -647,7 +665,7 @@ impl App {
         let hints: &[(&str, &str)] = if self.settings {
             &[("Esc", "back")]
         } else {
-            &[("Enter", "paste"), ("Shift", "plain"), ("Ctrl P", "pin"), ("Esc", "close")]
+            &[("Enter", "paste"), ("Shift", "plain"), (PIN_KEY, "pin"), ("Esc", "close")]
         };
         let mut x = full.left() + PAD;
         let cy = y + 22.0;

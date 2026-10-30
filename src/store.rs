@@ -4,6 +4,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+#[cfg(target_os = "linux")]
 // Offered on our own sources so a backend can tell its re-offer from someone else's copy.
 pub const OWNER_MARK: &str = "x-lclip/owner";
 // Password managers set this to say "do not keep this".
@@ -11,6 +12,7 @@ pub const SECRET_HINT: &str = "x-kde-passwordManagerHint";
 // How long a secret stays in memory.
 pub const SECRET_TTL: Duration = Duration::from_secs(30);
 
+#[cfg(target_os = "linux")]
 /// Protocol atoms that describe a selection but carry no content.
 pub fn is_data_mime(mime: &str) -> bool {
     !matches!(mime, "TARGETS" | "TIMESTAMP" | "MULTIPLE" | "SAVE_TARGETS" | "DELETE" | OWNER_MARK)

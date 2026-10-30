@@ -3,28 +3,37 @@ mod ctl;
 mod demo;
 mod icon;
 mod ipc;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg_attr(target_os = "macos", path = "paster_macos.rs")]
 mod paster;
 mod persist;
 mod single;
 mod store;
+#[cfg_attr(target_os = "macos", path = "tray_macos.rs")]
 mod tray;
 mod ui;
+#[cfg(target_os = "linux")]
 mod wayland;
+#[cfg(target_os = "linux")]
 mod x11;
 
 use std::{
     env,
     os::unix::process::CommandExt,
     process::{self, Child, Command, Stdio},
-    sync::{Arc, Mutex, mpsc},
-    thread,
+    sync::{
+        Arc, Mutex,
+        mpsc::{self, Receiver, Sender},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
 
 use ctl::{Action, Ctl};
-use store::{Cmd, Store};
+use store::{Cmd, Shared, Store};
 
 const USAGE: &str = "\
 lclip: clipboard manager
@@ -141,18 +150,30 @@ impl Window {
     }
 }
 
-fn run_daemon() -> Result<()> {
+/// A clipboard backend: watches copies and serves `Cmd`s until it fails.
+type Backend = fn(Shared, Receiver<Cmd>) -> Result<()>;
+
+#[cfg(target_os = "linux")]
+fn backend() -> Result<(&'static str, Backend)> {
     let wayland_session = env::var_os("WAYLAND_DISPLAY").is_some();
-    let use_wayland = wayland_session && wayland::supported();
-    let backend = if use_wayland {
-        "wayland"
+    if wayland_session && wayland::supported() {
+        Ok(("wayland", wayland::run))
     } else if env::var_os("DISPLAY").is_some() {
-        if wayland_session { "x11 via xwayland" } else { "x11" }
+        Ok((if wayland_session { "x11 via xwayland" } else { "x11" }, x11::run))
     } else {
         bail!("no usable display: need wlr-data-control on Wayland, or X11/XWayland")
-    };
+    }
+}
 
-    let mut store = Store::new(backend.to_string());
+#[cfg(target_os = "macos")]
+fn backend() -> Result<(&'static str, Backend)> {
+    Ok(("macos", macos::run))
+}
+
+fn run_daemon() -> Result<()> {
+    let (name, run) = backend()?;
+
+    let mut store = Store::new(name.to_string());
     persist::load(&mut store);
     let shared = Arc::new(Mutex::new(store));
     #[cfg(debug_assertions)]
@@ -168,19 +189,34 @@ fn run_daemon() -> Result<()> {
     let worker = {
         let shared = Arc::clone(&shared);
         thread::spawn(move || {
-            let result = if use_wayland {
-                wayland::run(Arc::clone(&shared), rx)
-            } else {
-                x11::run(Arc::clone(&shared), rx)
-            };
-            if let Err(e) = result {
+            if let Err(e) = run(Arc::clone(&shared), rx) {
                 eprintln!("lclip: {e:#}");
                 shared.lock().unwrap().backend = "stopped".into();
             }
         })
     };
 
-    let _tray = tray::start(Arc::clone(&ctl));
+    #[cfg(target_os = "linux")]
+    {
+        let _tray = tray::start(Arc::clone(&ctl));
+        control(&ctl, &shared, &tx, &worker)
+    }
+    // AppKit wants the main thread for the menu bar, so the control loop moves aside.
+    #[cfg(target_os = "macos")]
+    {
+        let c = Arc::clone(&ctl);
+        thread::spawn(move || {
+            if let Err(e) = control(&c, &shared, &tx, &worker) {
+                eprintln!("lclip: {e:#}");
+            }
+            process::exit(0);
+        });
+        tray::run(ctl)
+    }
+}
+
+/// Act on requests from the tray, the shortcut and other `lclip` commands until quit.
+fn control(ctl: &Ctl, shared: &Shared, tx: &Sender<Cmd>, worker: &JoinHandle<()>) -> Result<()> {
     let paster = paster::Paster::spawn();
     let mut window = Window::default();
 
@@ -214,7 +250,7 @@ fn run_daemon() -> Result<()> {
                 }
                 Action::Quit => {
                     window.hide();
-                    persist::flush(&shared);
+                    persist::flush(shared);
                     let _ = std::fs::remove_file(ipc::socket_path());
                     return Ok(());
                 }
@@ -222,7 +258,7 @@ fn run_daemon() -> Result<()> {
         }
         window.alive();
         if worker.is_finished() {
-            persist::flush(&shared);
+            persist::flush(shared);
             return Ok(());
         }
         thread::sleep(Duration::from_millis(40));
