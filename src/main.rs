@@ -8,6 +8,7 @@ mod macos;
 #[cfg_attr(target_os = "macos", path = "paster_macos.rs")]
 mod paster;
 mod persist;
+mod screenshots;
 mod single;
 mod store;
 #[cfg_attr(target_os = "macos", path = "tray_macos.rs")]
@@ -185,6 +186,7 @@ fn run_daemon() -> Result<()> {
     let ctl = Arc::new(Ctl::default());
     let (tx, rx) = mpsc::channel::<Cmd>();
     single::listen(Arc::clone(&ctl), Arc::clone(&shared), tx.clone());
+    screenshots::spawn(Arc::clone(&shared), tx.clone());
 
     let worker = {
         let shared = Arc::clone(&shared);

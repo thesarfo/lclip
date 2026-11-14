@@ -42,6 +42,12 @@ struct SettingsRec {
     persist: bool,
     #[serde(default)]
     paste_keys: PasteKeys,
+    #[serde(default = "yes")]
+    copy_screenshots: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// What the writer needs, copied out of the store so the lock is not held during disk io.
@@ -98,6 +104,7 @@ pub fn load(store: &mut Store) {
             skip_secrets: rec.skip_secrets,
             persist: rec.persist,
             paste_keys: rec.paste_keys,
+            copy_screenshots: rec.copy_screenshots,
         };
     }
     if !store.settings.persist {
@@ -153,6 +160,7 @@ fn try_save(snap: &Snapshot) -> std::io::Result<()> {
         skip_secrets: s.skip_secrets,
         persist: s.persist,
         paste_keys: s.paste_keys,
+        copy_screenshots: s.copy_screenshots,
     };
     write_private(&root.join("settings.json"), &serde_json::to_vec_pretty(&rec)?)?;
 

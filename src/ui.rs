@@ -627,6 +627,12 @@ impl App {
             #[cfg(not(target_os = "macos"))]
             ui.label(egui::RichText::new("Terminals need Ctrl Shift V.").font(body(12.5)).color(STONE));
 
+            group(ui, "SCREENSHOTS", |ui| {
+                setting(ui, "Copy new screenshots", Some("paste one right after you take it"), |ui| {
+                    toggle(ui, &mut set.copy_screenshots);
+                });
+            });
+
             group(ui, "PRIVACY", |ui| {
                 setting(ui, "Skip password manager copies", None, |ui| {
                     toggle(ui, &mut set.skip_secrets);

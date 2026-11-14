@@ -136,6 +136,8 @@ pub struct Settings {
     /// Keep history on disk between runs.
     pub persist: bool,
     pub paste_keys: PasteKeys,
+    /// Put each new screenshot on the clipboard.
+    pub copy_screenshots: bool,
 }
 
 impl Default for Settings {
@@ -147,6 +149,7 @@ impl Default for Settings {
             skip_secrets: false,
             persist: true,
             paste_keys: PasteKeys::default(),
+            copy_screenshots: true,
         }
     }
 }
