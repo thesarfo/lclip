@@ -27,7 +27,7 @@ unsafe extern "C" {
 const KEY_V: u16 = 0x09;
 
 /// Whether we may post key events. `prompt` shows the system dialog if not.
-fn trusted(prompt: bool) -> bool {
+pub fn trusted(prompt: bool) -> bool {
     let key = unsafe { CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt) };
     let value = if prompt { CFBoolean::true_value() } else { CFBoolean::false_value() };
     let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), value.as_CFType())]);

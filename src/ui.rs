@@ -136,6 +136,8 @@ struct App {
     thumb_rx: Receiver<(u64, egui::ColorImage)>,
     was_focused: bool,
     frames: u64,
+    /// False when macOS will not let lclip type Cmd+V, so a click only copies.
+    can_paste: bool,
 }
 
 impl App {
@@ -177,6 +179,7 @@ impl App {
             thumb_rx,
             was_focused: false,
             frames: 0,
+            can_paste: can_paste(),
         }
     }
 
@@ -666,8 +669,11 @@ impl App {
 
     fn footer(&self, ui: &mut egui::Ui, full: Rect) {
         let y = full.bottom() - 44.0;
+        ui.painter().line_segment([Pos2::new(full.left() + 1.0, y), Pos2::new(full.right() - 1.0, y)], Stroke::new(1.0, MIST));
+        if !self.settings && !self.can_paste {
+            return no_paste_warning(ui, full, y);
+        }
         let p = ui.painter();
-        p.line_segment([Pos2::new(full.left() + 1.0, y), Pos2::new(full.right() - 1.0, y)], Stroke::new(1.0, MIST));
         let hints: &[(&str, &str)] = if self.settings {
             &[("Esc", "back")]
         } else {
@@ -689,6 +695,35 @@ impl App {
 }
 
 // ---- pieces -------------------------------------------------------------------------------
+
+#[cfg(target_os = "macos")]
+fn can_paste() -> bool {
+    crate::paster::trusted(false)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn can_paste() -> bool {
+    true
+}
+
+/// Shown in place of the key hints when a click can only copy. Clicking it opens the
+/// Accessibility list in System Settings.
+fn no_paste_warning(ui: &mut egui::Ui, full: Rect, y: f32) {
+    let rect = Rect::from_min_max(Pos2::new(full.left() + PAD, y + 1.0), Pos2::new(full.right() - PAD, full.bottom()));
+    let resp = ui.interact(rect, ui.id().with("no_paste"), Sense::click());
+    let color = if resp.hovered() { INK } else { SLATE };
+    let t = ui.painter().layout_no_wrap("Click copies only. Allow lclip in Accessibility \u{2192}".into(), body(12.5), color);
+    ui.painter().galley(Pos2::new(rect.left(), rect.center().y - t.size().y / 2.0), t, color);
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    #[cfg(target_os = "macos")]
+    if resp.clicked() {
+        let _ = process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+            .spawn();
+    }
+}
 
 fn meta(e: &EntryView) -> String {
     if e.secret {
