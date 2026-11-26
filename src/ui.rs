@@ -21,6 +21,7 @@ use crate::{
     icon,
     ipc::{self, EntryView, Request, Snapshot},
     store::{Kind, Sel},
+    update::Update,
 };
 #[cfg(not(target_os = "macos"))]
 use crate::store::PasteKeys;
@@ -329,6 +330,10 @@ impl App {
                 self.settings = true;
             }
 
+            if snap.update != Update::None {
+                return self.update_chip(ui, ctx, &snap.update, gear.left() - 8.0, rect.center().y);
+            }
+
             // Which backend is doing the work.
             let ok = snap.backend != "stopped";
             let g = ui.painter().layout_no_wrap(snap.backend.clone(), mono(11.5), STONE);
@@ -338,6 +343,44 @@ impl App {
             p.rect_filled(chip, 12, MIST);
             p.circle_filled(Pos2::new(chip.left() + 12.0, chip.center().y), 3.5, if ok { SAGE } else { INK });
             p.galley(Pos2::new(chip.left() + 21.0, chip.center().y - g.size().y / 2.0), g, STONE);
+        }
+    }
+
+    /// Stands in for the backend chip while there is an update to talk about.
+    fn update_chip(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, update: &Update, right: f32, cy: f32) {
+        let (label, ready) = match update {
+            Update::Available { version } => (format!("Update to {version}"), true),
+            Update::Installing { .. } => ("Updating\u{2026}".to_string(), false),
+            Update::Failed { .. } => ("Update failed, retry".to_string(), true),
+            Update::None => return,
+        };
+        let g = ui.painter().layout_no_wrap(label, medium(12.5), if ready { CARD } else { STONE });
+        let w = g.size().x + 24.0;
+        let chip = Rect::from_min_size(Pos2::new(right - w, cy - 13.0), Vec2::new(w, 26.0));
+        let mut resp = ui.interact(chip, ui.id().with("update"), if ready { Sense::click() } else { Sense::hover() });
+        if let Update::Failed { error, .. } = update {
+            resp = resp.on_hover_text(error);
+        }
+        let fill = match (ready, resp.hovered()) {
+            (true, true) => SLATE,
+            (true, false) => INK,
+            (false, _) => MIST,
+        };
+        let p = ui.painter();
+        p.rect_filled(chip, 13, fill);
+        p.galley(Pos2::new(chip.left() + 12.0, cy - g.size().y / 2.0), g, CARD);
+        if ready && resp.hovered() {
+            ctx.set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        if ready && resp.clicked() {
+            if let Some(s) = self.snap.lock().unwrap().as_mut() {
+                let version = match update {
+                    Update::Available { version } | Update::Failed { version, .. } => version.clone(),
+                    _ => String::new(),
+                };
+                s.update = Update::Installing { version };
+            }
+            self.act(ctx, Request::Update);
         }
     }
 
@@ -633,6 +676,13 @@ impl App {
             group(ui, "SCREENSHOTS", |ui| {
                 setting(ui, "Copy new screenshots", Some("paste one right after you take it"), |ui| {
                     toggle(ui, &mut set.copy_screenshots);
+                });
+            });
+
+            group(ui, "UPDATES", |ui| {
+                let hint = concat!("lclip ", env!("CARGO_PKG_VERSION"), " \u{b7} asks GitHub every 6 h");
+                setting(ui, "Check for updates", Some(hint), |ui| {
+                    toggle(ui, &mut set.check_updates);
                 });
             });
 

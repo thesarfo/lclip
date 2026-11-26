@@ -47,6 +47,7 @@ In the window: click or `Enter` pastes, `Shift` pastes plain text, `Ctrl+P` (`Cm
 - On macOS, pasting sends `Cmd+V`, which needs Accessibility permission. lclip asks on first run; allow it under System Settings, Privacy & Security, Accessibility. Each build from source is a new binary to macOS, so allow it again after reinstalling.
 - History is saved in `~/.local/share/lclip` (`~/Library/Application Support/lclip` on macOS), readable only by you. Secrets are never saved.
 - GNOME on Wayland reads the clipboard through XWayland.
+- lclip asks GitHub for a newer release every 6 hours. When there is one, the window shows Update to x.y.z. Press it and lclip downloads the build for your system, checks its sha256, replaces itself and restarts. It needs `curl` and `tar`. Turn the check off under Settings, Updates. On macOS, allow Accessibility again after an update.
 
 ## Build
 

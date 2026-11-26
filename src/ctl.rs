@@ -9,6 +9,8 @@ pub enum Action {
     Quit,
     /// Internal: the window picked an entry, send the paste keys.
     Paste,
+    /// Internal: a new version is on disk, start it in place of this one.
+    Restart,
 }
 
 impl Action {
@@ -31,6 +33,7 @@ impl Action {
             Self::Clear => "clear",
             Self::Quit => "quit",
             Self::Paste => "paste",
+            Self::Restart => "restart",
         }
     }
 }

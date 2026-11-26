@@ -14,6 +14,7 @@ mod store;
 #[cfg_attr(target_os = "macos", path = "tray_macos.rs")]
 mod tray;
 mod ui;
+mod update;
 #[cfg(target_os = "linux")]
 mod wayland;
 #[cfg(target_os = "linux")]
@@ -187,6 +188,7 @@ fn run_daemon() -> Result<()> {
     let (tx, rx) = mpsc::channel::<Cmd>();
     single::listen(Arc::clone(&ctl), Arc::clone(&shared), tx.clone());
     screenshots::spawn(Arc::clone(&shared), tx.clone());
+    update::spawn_checker(Arc::clone(&shared));
 
     let worker = {
         let shared = Arc::clone(&shared);
@@ -249,6 +251,15 @@ fn control(ctl: &Ctl, shared: &Shared, tx: &Sender<Cmd>, worker: &JoinHandle<()>
                     thread::sleep(Duration::from_millis(160));
                     let keys = shared.lock().unwrap().settings.paste_keys;
                     paster.press(keys);
+                }
+                Action::Restart => {
+                    window.hide();
+                    persist::flush(shared);
+                    let _ = std::fs::remove_file(ipc::socket_path());
+                    let e = update::relaunch();
+                    // A non-zero exit has launchd start the new binary on macOS.
+                    eprintln!("lclip: could not start the new version: {e}");
+                    process::exit(1);
                 }
                 Action::Quit => {
                     window.hide();

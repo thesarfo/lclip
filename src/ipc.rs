@@ -11,7 +11,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::store::{Entry, Kind, Settings};
+use crate::{
+    store::{Entry, Kind, Settings},
+    update::Update,
+};
 
 pub fn socket_path() -> PathBuf {
     env::var_os("XDG_RUNTIME_DIR")
@@ -32,6 +35,8 @@ pub enum Request {
     Settings { settings: Settings },
     /// Raw bytes of one format, for thumbnails.
     Blob { id: u64, mime: String },
+    /// Download the newer release and restart on it.
+    Update,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -83,6 +88,8 @@ pub struct Snapshot {
     pub settings: Option<Settings>,
     pub clipboard: Vec<EntryView>,
     pub primary: Vec<EntryView>,
+    #[serde(default)]
+    pub update: Update,
 }
 
 /// Send one request and read the whole reply.

@@ -138,6 +138,8 @@ pub struct Settings {
     pub paste_keys: PasteKeys,
     /// Put each new screenshot on the clipboard.
     pub copy_screenshots: bool,
+    /// Ask GitHub for new releases now and then.
+    pub check_updates: bool,
 }
 
 impl Default for Settings {
@@ -150,6 +152,7 @@ impl Default for Settings {
             persist: true,
             paste_keys: PasteKeys::default(),
             copy_screenshots: true,
+            check_updates: true,
         }
     }
 }
@@ -161,6 +164,7 @@ pub struct Store {
     pub backend: String,
     /// Entry currently offered as the clipboard, if it is one of ours.
     pub current: Option<u64>,
+    pub update: crate::update::Update,
     next_id: u64,
     dirty: bool,
 }
@@ -175,6 +179,7 @@ impl Store {
             settings: Settings::default(),
             backend,
             current: None,
+            update: Default::default(),
             next_id: 1,
             dirty: false,
         }

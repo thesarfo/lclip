@@ -44,6 +44,8 @@ struct SettingsRec {
     paste_keys: PasteKeys,
     #[serde(default = "yes")]
     copy_screenshots: bool,
+    #[serde(default = "yes")]
+    check_updates: bool,
 }
 
 fn yes() -> bool {
@@ -105,6 +107,7 @@ pub fn load(store: &mut Store) {
             persist: rec.persist,
             paste_keys: rec.paste_keys,
             copy_screenshots: rec.copy_screenshots,
+            check_updates: rec.check_updates,
         };
     }
     if !store.settings.persist {
@@ -161,6 +164,7 @@ fn try_save(snap: &Snapshot) -> std::io::Result<()> {
         persist: s.persist,
         paste_keys: s.paste_keys,
         copy_screenshots: s.copy_screenshots,
+        check_updates: s.check_updates,
     };
     write_private(&root.join("settings.json"), &serde_json::to_vec_pretty(&rec)?)?;
 

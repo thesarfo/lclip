@@ -9,6 +9,7 @@ use crate::{
     ctl::{Action, Ctl},
     ipc::{EntryView, Request, Snapshot, socket_path},
     store::{Cmd, Shared},
+    update,
 };
 
 /// Hand an action to an already running daemon. False means none is running.
@@ -38,7 +39,7 @@ pub fn listen(ctl: Arc<Ctl>, shared: Shared, tx: Sender<Cmd>) {
     });
 }
 
-fn handle(mut stream: UnixStream, ctl: &Ctl, shared: &Shared, tx: &Sender<Cmd>) {
+fn handle(mut stream: UnixStream, ctl: &Arc<Ctl>, shared: &Shared, tx: &Sender<Cmd>) {
     let mut line = String::new();
     if BufReader::new(&stream).take_line(&mut line).is_err() {
         return;
@@ -62,6 +63,7 @@ fn handle(mut stream: UnixStream, ctl: &Ctl, shared: &Shared, tx: &Sender<Cmd>) 
                 settings: Some(s.settings.clone()),
                 clipboard: s.clipboard.iter().map(EntryView::of).collect(),
                 primary: s.primary.iter().map(EntryView::of).collect(),
+                update: s.update.clone(),
             };
             serde_json::to_vec(&snap).unwrap_or_default()
         }
@@ -96,6 +98,10 @@ fn handle(mut stream: UnixStream, ctl: &Ctl, shared: &Shared, tx: &Sender<Cmd>) 
                 s.settings = settings;
                 s.touch();
             }
+            Vec::new()
+        }
+        Request::Update => {
+            update::start(Arc::clone(shared), Arc::clone(ctl));
             Vec::new()
         }
         Request::Blob { id, mime } => {
