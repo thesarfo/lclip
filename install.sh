@@ -29,6 +29,9 @@ if [ "$(uname -s)" = Darwin ]; then
         "$bin" quit 2>/dev/null || true
         mkdir -p "$(dirname "$bin")" "$(dirname "$agent")" "$HOME/Library/Logs"
         install -m755 "$src" "$bin"
+        # A proper ad-hoc signature with a fixed identifier. The linker's own signature
+        # changes name every build and macOS privacy settings often won't stick to it.
+        codesign --force -s - -i com.thesarfo.lclip "$bin"
 
         shortcut="${LCLIP_SHORTCUT:-cmd+shift+KeyV}"
         esc() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }

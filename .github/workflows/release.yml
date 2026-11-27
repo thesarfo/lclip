@@ -66,6 +66,7 @@ jobs:
           mkdir "$name"
           lipo -create -output "$name/lclip" \
             target/aarch64-apple-darwin/release/lclip target/x86_64-apple-darwin/release/lclip
+          codesign --force -s - -i com.thesarfo.lclip "$name/lclip"
           cp install.sh README.md "$name/"
           tar czf "$name.tar.gz" "$name"
           shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
